@@ -1,0 +1,7 @@
+rss: http://rss.cnn.com/rss/cnn_topstories.rss #
+watch: True # True to run on 
+author_filter: "" # Name/byline to filter
+update_frequency: 3600 # in seconds
+directories: # Relative to root project directory
+  output_dir: /site # Site output directory
+  template_dir: /templates # Directory for jinja2 templates
