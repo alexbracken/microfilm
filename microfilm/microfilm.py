@@ -122,8 +122,9 @@ class ArticleDownloader():
                     if has_text(a):
                         articles.append(a)
                     else:
-                        a = self._fulltext(url)
-                        articles.append(a)
+                        fulltext_article = self._fulltext(url)
+                        if fulltext_article:
+                            articles.append(fulltext_article)
                 else:
                     logging.info(f"Author does not match filter")
             except np.ArticleException as e: 
@@ -134,10 +135,10 @@ class ArticleDownloader():
         logging.info(f"Successfully downloaded {len(articles)} articles")
         return articles
     def _is_valid(self, a:np.Article) -> bool:
-        if a.text or not a.text.strip() or not a.is_valid_body:
-            logging.info(f"No text found in: {a.title}")
+        if a.text and a.text.strip() and a.is_valid_body:
             return True
         else:
+            logging.info(f"No text found in: {a.title}")
             return False
     def _fulltext(self, url):
         try:
@@ -150,7 +151,7 @@ class ArticleDownloader():
                         page.goto(url, timeout=10000)
                         time.sleep(1)
                         content = page.content()
-                        article = np.article(url=url, input_html=content, language='en', config=self.npconfig)
+                        article = np.article(url=url, input_html=content, language='en', config=self.npconfig).parse()
                         logging.info(f"Fulltext extraction successful for {url}")
                         return article
                     finally:
