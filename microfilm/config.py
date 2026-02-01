@@ -21,6 +21,8 @@ class Config:
     # Output directory for generated HTML files (relative to project root)
     output_dir = "site"
     
+    output_formats: list = ["html", "json"]
+    
     # Template directory for Jinja2 templates (relative to project root)
     template_dir = "templates"
     
