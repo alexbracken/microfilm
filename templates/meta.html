@@ -1,0 +1,31 @@
+{% block metadata %}
+    <!-- Standard article metadata -->
+    <meta name="article-title" content="{{ title or '' }}">
+    <meta name="article-url" content="{{ url or '' }}">
+    <meta name="article-source" content="{{ source or '' }}">
+    <meta name="article-published-date" content="{{ date or '' }}">
+    <meta name="article-language" content="{{ language or 'en' }}">
+    <meta name="article-summary" content="{{ summary or '' }}">
+    
+    <!-- JSON-LD structured data for search engines -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "NewsArticle",
+        "headline": "{{ title or '' }}",
+        "url": "{{ url or '' }}",
+        "datePublished": "{{ date or '' }}",
+        "author": [
+            {% for author in author %}
+            {"@type": "Person", "name": "{{ author }}"}{% if not loop.last %},{% endif %}
+            {% endfor %}
+        ],
+        "inLanguage": "{{ language or 'en' }}",
+        "description": "{{ summary or '' }}",
+        "isPartOf": {
+            "@type": "WebSite",
+            "url": "{{ source or '' }}"
+        }
+    }
+    </script>
+{% endblock %}
