@@ -24,6 +24,7 @@ def main():
             break
         except KeyboardInterrupt:
             logging.info('Manual break by user')
+            break
 
         logging.info(f"Sleeping for {config.update_frequency} seconds")
         time.sleep(config.update_frequency)
