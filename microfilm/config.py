@@ -16,7 +16,7 @@ class Config:
     
     # How often to check the feed in seconds
     # Example: 3600 (1 hour), 1800 (30 minutes)
-    update_frequency: int = 3600
+    update_frequency: int = 1800
     
     # Output directory for generated HTML files (relative to project root)
     output_dir = "site"
