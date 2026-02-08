@@ -1,145 +1,140 @@
-from config import Config
+import config
 
 import newspaper as np
 import feedparser
 from playwright.sync_api import sync_playwright
 from jinja2 import Environment, FileSystemLoader
-import xml.etree.ElementTree as ET
 
 import time
 import logging
 import re
 import unicodedata
 from pathlib import Path
-from xml.etree import ElementTree as xml
 import json
 from dataclasses import dataclass
 
-config = Config()
+cfg = config.load_config()
 
 class Microfilm():
     def __init__(self):
         self.etag = None
         self.modified = None
+        self.rss = cfg.rss
         
-    def watch(self):
-        newsgather = Newsgather(config.rss, etag=self.etag, modified=self.modified)
-        feed = newsgather.feed
-        if feed:
-            # Update persistent etag and modified for next conditional GET
-            self.etag = newsgather.etag
-            self.modified = newsgather.modified
+    def generate(self):
+        newsgather = Newsgather(self.rss, etag=self.etag, modified=self.modified)
+        feed = newsgather.gather()
+        if feed is not None:
             articles = ArticleDownloader().download(feed)
             Typeset().generator(articles)
-
+            
+    def regenerate(self):
+        for file in cfg.output_directory.rglob('*.json'):
+            with open(file, 'r', encoding='utf-8') as file:
+                data = json.load(file)
+                Typeset()._generate_html(data)
+        
 class Newsgather():
     def __init__(self, url:str, etag=None, modified=None):
-        self.config = Config()
-        self.url = url
         self.etag = etag
         self.modified = modified
-        self.feed = self.parse()
-
-    def fetch(self):
-        '''
-        Fetch the RSS feed
         
-        :param feed: RSS feed URL
-        :return: FeedParserDict object
-        '''
+    def gather(self):
+        fetch = self._fetch
+        valid = self._validate
+        
+        feed = fetch(cfg.rss)
+        if valid(feed) and feed is not None:
+            logging.info(f"Feed at {feed.url}")
+            return feed
+            
+    def _fetch(self, url:str):
         try:
-            feed = feedparser.parse(self.config.rss, 
+            feed = feedparser.parse(url, 
                                     etag=self.etag, 
                                     modified=self.modified)
             logging.info("Successfully fetched feed")
             return feed
         except Exception as e:
             logging.warning(f"Could not scrape feed: {e}")
-            return None
-            
-    def parse(self):
-        try:
-            feed = self.fetch()
-        except Exception as e:
-            logging.warning(f"Could not scrape feed: {e}")
-            return None
-            
-        if feed and isinstance(feed, feedparser.FeedParserDict):
+        
+    def _validate(self, feed):
+        if feed is None:
+            logging.warning(f"Feed is not valid")
+            return False
+        else:
             if feed.bozo:
                 e = feed.bozo_exception
                 logging.warning(f"Feed is not valid: {e}")
+                return False
             logging.info(f"Feed status code: {feed.status}")
             if feed.status == 304:
                 logging.info("Feed has not been updated")
-                return None
+                return False
             if feed.status in [200, 301, 302, 307, 308]:
-                logging.info("Feed has been updated")
                 if hasattr(feed, "etag"):
                     self.etag = feed.etag
                 if hasattr(feed, "modified"):
                     self.modified = feed.modified
-                return feed
-        logging.warning("Feed is None or not a valid FeedParserDict")
-        return None
+                return True
 
 class ArticleDownloader():
-    def __init__(self):
-        self.npconfig = np.Config()
-        self.config = Config()
         
-    def download(self, feed):
-        config = self.config
-        author_filter = config.author_filter
+    def download(self, feed: feedparser.FeedParserDict):
+        valid = self._validate_entry
         articles = []
-        
-        if not feed.entries:
-            logging.warning("Feed has no entries")
-            return articles
         
         logging.info(f"Found {len(feed.entries)} articles in feed")
         
-        for i in range(min(config.max_articles, len(feed.entries))):
-            try:
-                entry = feed.entries[i]
-                if not hasattr(entry, 'link') or not entry.link:
-                    logging.warning(f"Article {i+1} missing link, skipping")
-                    continue
-                if not hasattr(entry, 'title') or not entry.title:
-                    logging.warning(f"Article {i+1} missing title, skipping")
-                    continue
-            except IndexError:
-                logging.error(f"IndexError accessing entry {i}")
-                break
+        for i in range(min(cfg.max_articles, len(feed.entries))):
+            entry = feed.entries[i]
+            if valid(entry) == True:
+                a = self._download_article(entry.link)
+                if a is not None:
+                    articles.append(a)
             
-            url = entry.link
-            try:
-                logging.info(f"Processing article ({i+1}/{min(config.max_articles, len(feed.entries))}): \"{entry.title}\"")
-                a = np.article(url = url, config = config.np_config).download().parse()
-                has_text = self._is_valid
-                filter = self._filter
-                
-                if filter(a):
-                    if has_text(a):
-                        articles.append(a)
-                    else:
-                        fulltext_article = self._fulltext(url)
-                        if fulltext_article:
-                            articles.append(fulltext_article)
-                else:
-                    logging.info(f"Author does not match filter")
-            except np.ArticleException as e: 
-                logging.error(f"ArticleException downloading {url}: {e}")
-            except Exception as e:
-                logging.error(f"Unexpected error processing article {url}: {type(e).__name__}: {e}", exc_info=True)
-
+            
         logging.info(f"Successfully downloaded {len(articles)} articles")
         return articles
+    
+    def _download_article(self, url):
+        has_text = self._is_valid
+        filter = self._filter
+        
+        try:
+            a = np.article(url = url, config = cfg.newspaper)
+            if filter(a):
+                if has_text(a):
+                    return a
+                else:
+                    fulltext_article = self._fulltext(url)
+                    if fulltext_article:
+                        return fulltext_article
+            else:
+                logging.info(f"Author does not match filter")
+        except np.ArticleException as e: 
+            logging.error(f"ArticleException downloading {url}: {e}")
+        except Exception as e:
+            logging.error(f"Unexpected error processing article {url}: {type(e).__name__}: {e}", exc_info=True)
+
+    def _validate_entry(self, entry):
+        try:
+            if not hasattr(entry, 'link') or not entry.link:
+                return False
+            if not hasattr(entry, 'title') or not entry.title:
+                return False
+            else:
+                return True
+        except IndexError:
+            logging.warning(f"Could not access entry")
+    
     def _is_valid(self, a:np.Article) -> bool:
         if a.text and a.text.strip() and a.is_valid_body:
             return True
         else:
             logging.info(f"No text found in: {a.title}")
             return False
+        
     def _fulltext(self, url):
         try:
             with sync_playwright() as p:
@@ -151,7 +146,7 @@ class ArticleDownloader():
                         page.goto(url, timeout=10000)
                         time.sleep(1)
                         content = page.content()
-                        article = np.article(url=url, input_html=content, language='en', config=self.npconfig).parse()
+                        article = np.article(url=url, input_html=content, language='en', config = cfg.newspaper).parse()
                         logging.info(f"Fulltext extraction successful for {url}")
                         return article
                     finally:
@@ -163,7 +158,7 @@ class ArticleDownloader():
             return None
         
     def _filter(self, a) -> bool:
-        filter = self.config.author_filter
+        filter = cfg.author_filter
         
         # If no filter configured, accept all articles
         if not filter or filter == "":
@@ -192,22 +187,28 @@ class Typeset():
             try:
                 if not a.title or not a.title.strip():
                     logging.warning(f"Article {idx} missing title, skipping generation")
-                    continue
-                
-                d = self._store_data(a)
-                generate = self.generators()
-                files = generate(d)
-                generated_count += 1
-                logging.debug(f"Generated output for article: {a.title[:50]}...")
+                    break
+                else:
+                    d = self._store_data(a)
+                    generate = self.generators()
+                    files = generate(d)
+                    generated_count += 1
+                    logging.debug(f"Generated output for article: {a.title[:50]}...")
             except Exception as e:
                 logging.error(f"Error generating page for {a.url}: {type(e).__name__}: {e}", exc_info=True)
         
         logging.info(f"Successfully generated {generated_count}/{len(articles)} articles")
-                
+
+
     def _store_data(self, a:np.Article) -> dict[str, str]:
+        def _check(d):
+            if d:
+                return True
+            else:
+                return None
         data = {
-            "text": a.text,
-            "html": a.article_html,
+            "text": _check(a.text),
+            "html": _check(a.article_html),
             "author": a.authors,
             "date": a.publish_date.isoformat() if a.publish_date else "",
             "title": a.title or "",
@@ -218,7 +219,7 @@ class Typeset():
         return data
         
     def generators(self):
-        formats = config.output_formats
+        formats = cfg.formats
         format_methods = {
             "json": self._generate_json,
             "html": self._generate_html,
@@ -242,17 +243,17 @@ class Typeset():
         
     def _generate_html(self, data):
         try:
-            if not Path(config.template_dir).exists():
-                logging.error(f"Template directory does not exist: {config.template_dir}")
-                raise FileNotFoundError(f"Template directory not found: {config.template_dir}")
+            if not Path(cfg.output_directory).exists():
+                logging.error(f"Template directory does not exist: {cfg.template_directory}")
+                raise FileNotFoundError(f"Template directory not found: {cfg.template_directory}")
             
-            loader = FileSystemLoader(config.template_dir)
+            loader = FileSystemLoader(cfg.template_directory)
             env = Environment(loader=loader)
             
             try:
                 template = env.get_template("article.html")
             except Exception as e:
-                logging.error(f"Template 'article.html' not found in {config.template_dir}: {e}")
+                logging.error(f"Template 'article.html' not found in {cfg.template_directory}: {e}")
                 raise
             
             html = template.render(data)
@@ -275,7 +276,7 @@ class Typeset():
             raise ValueError("File content cannot be empty")
         
         filename = _slugify(title) + "." + format
-        file_path = Path.joinpath(Path(config.output_dir), filename)
+        file_path = Path.joinpath(Path(cfg.output_directory), filename)
         
         if file_path.exists():
             logging.info(f"File already exists, overwriting: {filename}")
