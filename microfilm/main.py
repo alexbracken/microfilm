@@ -1,10 +1,10 @@
 import microfilm
-from config import Config
+import config
 import logging
 import time
 
 logger = logging.getLogger(__name__)
-config = Config()
+cfg = config.load_config()
 
 def main():
     logging.basicConfig(
@@ -15,10 +15,10 @@ def main():
     
     app = microfilm.Microfilm()
     
-    while config.watch:
+    while cfg.mode == "watch":
         logging.info("Starting watch mode. Press Ctrl+C to exit.")
         try:
-            app.watch()
+            app.generate()
         except Exception as e:
             logging.error(f"An error occurred: {e}")
             break
@@ -26,8 +26,19 @@ def main():
             logging.info('Manual break by user')
             break
 
-        logging.info(f"Sleeping for {config.update_frequency} seconds")
-        time.sleep(config.update_frequency)
+        logging.info(f"Sleeping for {cfg.update_frequency} seconds")
+        time.sleep(cfg.update_frequency)
+
+    while cfg.mode == "cron":
+        try:
+            app.generate()
+            break
+        except Exception as e:
+            logging.error(f"An error occurred: {e}")
+            break
+        except KeyboardInterrupt:
+            logging.info('Manual break by user')
+            break
 
 if __name__ == "__main__":
     main()
