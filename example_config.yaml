@@ -1,0 +1,9 @@
+rss: https://abcnews.go.com/abcnews/usheadlines
+mode: cron # or watch
+max_articles: 10 
+author_filter: ALEX BRACKEN
+update_frequency: 1800 # in seconds (1800 is 30 mins)
+formats: ['html', 'json'] # json is recommended for data storage
+output_directory: site # relative to project directory, not script directory
+template_directory: templates # relative to project directory, not script directory
+    
