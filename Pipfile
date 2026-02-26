@@ -8,6 +8,7 @@ newspaper4k = "*"
 playwright = "*"
 jinja2 = "*"
 feedparser = "*"
+typer = "*"
 
 [dev-packages]
 
