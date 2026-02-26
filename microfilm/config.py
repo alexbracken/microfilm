@@ -18,8 +18,9 @@ class Config:
 # Define module and project roots
 MODULE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+config_path = Path.joinpath(PROJECT_ROOT, 'config.yaml')
 
-def load_config(config_path='config.yaml') -> Config:
+def load_config() -> Config:
     try:
         with open(config_path, 'r') as file:
             data = yaml.safe_load(file)
@@ -36,10 +37,7 @@ def load_config(config_path='config.yaml') -> Config:
 
     except FileNotFoundError:
         print(f"Error: Config file not found at {config_path}")
-        return None
+        raise
     except yaml.YAMLError as e:
         print(f"Error parsing YAML file: {e}")
-        return None
-
-if __name__ == "__main__":
-    config = load_config()
+        raise
