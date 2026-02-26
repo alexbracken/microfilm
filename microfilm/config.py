@@ -13,6 +13,7 @@ class Config:
     formats: list[str]
     output_directory: Path
     template_directory: Path
+    timeout: int                     # <---- added
     newspaper: NewspaperConfig
 
 # Define module and project roots

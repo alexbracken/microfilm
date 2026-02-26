@@ -233,24 +233,36 @@ class ArticleDownloader():
                 browser = p.chromium.launch()
                 try:
                     page = browser.new_page()
+                    # apply the configured timeout globally
+                    page.set_default_timeout(cfg.timeout)
                     try:
                         logging.info(f"Fetching fulltext with browser for {url}")
-                        page.goto(url, timeout=10000)
+                        page.goto(url, timeout=cfg.timeout)
                         time.sleep(1)
                         content = page.content()
-                        article = np.article(url=url, input_html=content, language='en', config = cfg.newspaper).parse()
+                        article = np.article(
+                            url=url,
+                            input_html=content,
+                            language='en',
+                            config=cfg.newspaper
+                        ).parse()
                         logging.info(f"Fulltext extraction successful for {url}")
                         return article
                     except TimeoutError as e:
                         logging.warning(f"Fulltext extraction timed out: {e}")
-                        logging.debug(f"Fetching fulltext via Playwright for {url}")
-                        page.goto(url, timeout=20000)
+                        logging.debug(f"Retrying with extended timeout for {url}")
+                        # second attempt uses twice the configured value
+                        page.goto(url, timeout=cfg.timeout * 2)
                         time.sleep(2)
                         content = page.content()
-                        article = np.article(url=url, input_html=content, language='en', config = cfg.newspaper).parse()
+                        article = np.article(
+                            url=url,
+                            input_html=content,
+                            language='en',
+                            config=cfg.newspaper
+                        ).parse()
                         logging.info(f"Fulltext extraction successful for {url}")
                         return article
-                        
                     except Exception as e:
                         logging.warning(f"Fulltext extraction failed: {e}")
                     finally:
