@@ -5,13 +5,24 @@ from newspaper.mthreading import fetch_news
 
 # External dependencies
 import feedparser
-from playwright.sync_api import sync_playwright
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    def sync_playwright(*args, **kwargs):
+        raise ImportError(
+            "Playwright is not installed. Install it with:\n"
+            "  pip install playwright\n"
+            "Then install browser binaries with:\n"
+            "  playwright install chromium\n"
+            "Read more: https://playwright.dev/python/docs/intro"
+        )
 from jinja2 import Environment, FileSystemLoader
 
 # Module imports
 import time
 import logging
 import re
+import os
 import unicodedata
 from pathlib import Path
 import json
@@ -21,8 +32,11 @@ cfg = config.load_config()
 
 # Define module and project roots
 MODULE_ROOT = Path(__file__).resolve().parent
+logging.debug(f"MODULE ROOT: {MODULE_ROOT}")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+logging.debug(f"PROJECT ROOT: {PROJECT_ROOT}")
 SITE_DIRECTORY = Path.joinpath(PROJECT_ROOT, cfg.output_directory)
+logging.debug(f"SITE DIRECTORY: {SITE_DIRECTORY}")
 
 class Microfilm():
     def __init__(self):
@@ -35,21 +49,17 @@ class Microfilm():
         articles = []
         newsgather = Newsgather(self.rss)
         feed = newsgather.gather()
-        
-        results = fetch_news(list(feed), threads=4)
-        
+
+        results = fetch_news(list(feed), threads=cfg.thread_count)
+
         filtered_articles = []
         for article in results:
             if self._filter_author(article):
-                article = ArticleDownloader(article.url).download()
-                filtered_articles.append(article)
-            else:
-                pass
-        
+                downloaded = ArticleDownloader(article.url).download()
+                if downloaded:
+                    filtered_articles.append(downloaded)
         Typeset().generator(filtered_articles)
-        
-            
-            
+             
     def regenerate(self):
         for file in cfg.output_directory.rglob('*.json'):
             with open(file, 'r', encoding='utf-8') as file:
@@ -67,25 +77,21 @@ class Microfilm():
                 if urls:
                     saved_urls = set(self._load_json_articles())
                     new_urls = [url for url in urls if url not in saved_urls]
-                    
-                    logging.info(f"Found {len(urls)} total URLs, {len(new_urls)} new URLs to process")
 
-                saved_urls = set(self._load_json_articles())
-                new_urls = [item for item in urls if item not in saved_urls]
-                print(new_urls)
-                for url in new_urls:
-                    logging.info(f"Processing URL: {url}") 
-                    article_downloader = ArticleDownloader(url)
-                    article = article_downloader.download()
-                    
-                    if article:
-                        type_setter = Typeset()
-                        type_setter._store_data(article)
-                        print("Article processed successfully!")
-                    else:
-                        print(f"Failed to download article from {url}")
+                    logging.info(f"Found {len(urls)} total URLs, {len(new_urls)} new URLs to process")
+                    typeset = Typeset()
+                    for url in new_urls:
+                        logging.info(f"Processing URL: {url}")
+                        article = ArticleDownloader(url).download()
+
+                        if article:
+                            data = typeset._store_data(article)
+                            typeset.generators()(data)
+                            logging.info("Article processed successfully!")
+                        else:
+                            logging.warning(f"Failed to download article from {url}")
         else:
-            print(f"File format \"{file_path.suffix}\" is not supported")
+            logging.error(f"File format \"{file_path.suffix}\" is not supported")
             raise ValueError
         
     def _filter_author(self, a):
@@ -150,10 +156,9 @@ class Newsgather():
                 
     def fetch(self, url:str) -> feedparser.FeedParserDict:
         try:
-            feed = feedparser.parse(url, 
-                                    etag=self.etag, 
+            feed = feedparser.parse(url,
+                                    etag=self.etag,
                                     modified=self.modified)
-            logging.info("Successfully fetched feed")
             return feed
         except Exception as e:
             logging.warning(f"Could not scrape feed: {e}")
@@ -168,9 +173,9 @@ class Newsgather():
                 e = feed.bozo_exception
                 logging.warning(f"Feed is not valid: {e}")
                 return False
-            logging.info(f"Feed status code: {feed.status}")
+            logging.debug(f"Feed status code: {feed.status}")
             if feed.status == 304:
-                logging.info("Feed has not been updated")
+                logging.debug("Feed has not been updated")
                 return False
             if feed.status in [200, 301, 302, 307, 308]:
                 if hasattr(feed, "etag"):
@@ -183,30 +188,42 @@ class ArticleDownloader():
     def __init__(self, url) -> None:
         self.url = url
         #TODO Accept list[str] for batch processing?
-        
+
+    def _create_article(self, url: str, html: str = None) -> np.Article:
+        """Create and parse an article from URL or HTML."""
+        article = np.Article(url=url, input_html=html, language='en', config=cfg.newspaper)
+        if not html:
+            article.download()
+        article.parse()
+        return article if article.text else None
+
+    def _get_url_context(self, url):
+        """Extract domain and path info for better error reporting."""
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            return f"{parsed.netloc} ({parsed.scheme}://{parsed.hostname})"
+        except:
+            return url[:50] + ("..." if len(url) > 50 else "")
     def download(self):
-        has_text = self._is_valid
         url = self.url
         try:
-            a = np.Article(url=url, config=cfg.newspaper)
-            a.download()
-            a.parse()
-            
-            if a.text and a.text.strip():
+            a = self._create_article(url)
+
+            if a:
                 logging.info(f"Article downloaded successfully: {a.title}")
                 return a
             else:
-                logging.info(f"No text found in: {a.title if a.title else url}")
+                logging.info(f"No text found in: {url}")
                 # Try fulltext extraction as fallback
-                fulltext_article = self._fulltext(url)
-                return fulltext_article
-                    
-        except np.ArticleException as e: 
-            logging.error(f"ArticleException downloading {url}: {e}")
-            fulltext_article = self._fulltext(url)
-            return fulltext_article
+                article = self._fulltext(url)
+                return article
+
+        except np.ArticleException as e:
+            logging.error(f"ArticleException downloading [{self._get_url_context(url)}]: {e}")
+            return self._fulltext(url)
         except Exception as e:
-            logging.error(f"Unexpected error processing article {url}: {type(e).__name__}: {e}", exc_info=True)
+            logging.error(f"Unexpected error processing article [{self._get_url_context(url)}]: {type(e).__name__}: {e}", exc_info=True)
             return None
 
     def _validate_entry(self, entry):
@@ -228,50 +245,74 @@ class ArticleDownloader():
             return False
         
     def _fulltext(self, url):
+        """Extract article text from page using Playwright browser."""
         try:
             with sync_playwright() as p:
-                browser = p.chromium.launch()
+                browser = p.chromium.launch(headless=True)
                 try:
                     page = browser.new_page()
-                    # apply the configured timeout globally
                     page.set_default_timeout(cfg.timeout)
-                    try:
-                        logging.info(f"Fetching fulltext with browser for {url}")
-                        page.goto(url, timeout=cfg.timeout)
-                        time.sleep(1)
-                        content = page.content()
-                        article = np.article(
-                            url=url,
-                            input_html=content,
-                            language='en',
-                            config=cfg.newspaper
-                        ).parse()
-                        logging.info(f"Fulltext extraction successful for {url}")
-                        return article
-                    except TimeoutError as e:
-                        logging.warning(f"Fulltext extraction timed out: {e}")
-                        logging.debug(f"Retrying with extended timeout for {url}")
-                        # second attempt uses twice the configured value
-                        page.goto(url, timeout=cfg.timeout * 2)
-                        time.sleep(2)
-                        content = page.content()
-                        article = np.article(
-                            url=url,
-                            input_html=content,
-                            language='en',
-                            config=cfg.newspaper
-                        ).parse()
-                        logging.info(f"Fulltext extraction successful for {url}")
-                        return article
-                    except Exception as e:
-                        logging.warning(f"Fulltext extraction failed: {e}")
-                    finally:
-                        page.close()
+                    return self._fetch_page_content(page, url)
+                finally:
+                    browser.close()
+        except TimeoutError:
+            logging.warning(f"[TIMEOUT] Fulltext extraction timed out [{self._get_url_context(url)}]")
+            return self._retry_fulltext_with_backoff(url)
+        except Exception as e:
+            logging.warning(f"[{type(e).__name__}] Fulltext extraction failed [{self._get_url_context(url)}]: {e}")
+            return None
+
+    def _fetch_page_content(self, page, url, wait_strategy="networkidle"):
+        """Fetch page content with specified wait strategy."""
+        try:
+            logging.info(f"[FETCH] Loading {url} with {wait_strategy} strategy")
+            page.goto(url, timeout=cfg.timeout)
+
+            # Use appropriate wait strategy
+            if wait_strategy == "networkidle":
+                page.wait_for_load_state("networkidle", timeout=cfg.timeout)
+            else:
+                page.wait_for_load_state("domcontentloaded", timeout=cfg.timeout)
+
+            html = page.content()
+            article = self._create_article(url, html)
+            if article:
+                logging.info(f"[SUCCESS] Fulltext extraction succeeded [{self._get_url_context(url)}]")
+            else:
+                logging.info(f"[EMPTY] No extractable text in page [{self._get_url_context(url)}]")
+            return article
+        except TimeoutError:
+            # Try to extract whatever loaded before timeout
+            try:
+                html = page.content()
+                logging.debug(f"[PARTIAL] Got partial content before timeout [{self._get_url_context(url)}]")
+                article = self._create_article(url, html)
+                return article
+            except:
+                raise
+
+    def _retry_fulltext_with_backoff(self, url, attempt=1, max_attempts=None):
+        """Retry fulltext extraction with simpler strategies."""
+        if max_attempts is None:
+            max_attempts = cfg.playwright_retry_attempts
+        if attempt >= max_attempts:
+            logging.error(f"[EXHAUSTED] Max retry attempts ({max_attempts-1}) reached [{self._get_url_context(url)}]")
+            return None
+
+        logging.debug(f"[RETRY {attempt}/{max_attempts-1}] Attempting simpler extraction strategy")
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                try:
+                    page = browser.new_page()
+                    page.set_default_timeout(cfg.timeout * 2)
+                    # Use simpler wait strategy on retry
+                    return self._fetch_page_content(page, url, wait_strategy="domcontentloaded")
                 finally:
                     browser.close()
         except Exception as e:
-            logging.warning(f"Fulltext extraction failed for {url}: {type(e).__name__}: {e}")
-            return None
+            logging.warning(f"[RETRY_FAILED {attempt}] {type(e).__name__}: {e}")
+            return self._retry_fulltext_with_backoff(url, attempt + 1, max_attempts)
            
 class Typeset():
     def generator(self, articles):
@@ -286,14 +327,12 @@ class Typeset():
             try:
                 if not a.title or not a.title.strip():
                     logging.warning(f"Article {idx} missing title, skipping generation")
-                    break
-                else:
-                    d = self._store_data(a)
-                    print(d)
-                    generate = self.generators()
-                    files = generate(d)
-                    generated_count += 1
-                    logging.debug(f"Generated output for article: {a.title[:50]}...")
+                    continue
+                d = self._store_data(a)
+                generate = self.generators()
+                files = generate(d)
+                generated_count += 1
+                logging.debug(f"Generated output for article: {a.title[:50]}...")
             except Exception as e:
                 logging.error(f"Error generating page for {a.url}: {type(e).__name__}: {e}", exc_info=True)
         
@@ -310,7 +349,7 @@ class Typeset():
             if idx == -1:
                 return raw_html.strip()
             return raw_html[idx:].strip()
-        
+
         data = {
             "text": _check(a.text),
             "html": _raw_html(a.article_html),
@@ -321,7 +360,6 @@ class Typeset():
             "source": a.source_url or "",
             "summary": a.summary or "",
         }
-        Typeset().json(data)
         return data
         
     def generators(self):
@@ -349,10 +387,10 @@ class Typeset():
         
     def html(self, data):
         try:
-            if not Path(cfg.output_directory).exists():
+            if not Path(cfg.template_directory).exists():
                 logging.error(f"Template directory does not exist: {cfg.template_directory}")
                 raise FileNotFoundError(f"Template directory not found: {cfg.template_directory}")
-            
+
             loader = FileSystemLoader(cfg.template_directory)
             env = Environment(loader=loader)
             
