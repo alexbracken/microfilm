@@ -19,7 +19,7 @@ class Config:
     playwright_wait_strategy: str = "networkidle"
 
 # Define module and project roots
-MODULE_ROOT = Path(__file__).resolve().parent
+MODULE_ROOT = Path(__file__).resolve().parent.resolve()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 config_path = Path.joinpath(PROJECT_ROOT, 'config.yaml')
 
@@ -28,9 +28,9 @@ def load_config() -> Config:
         with open(config_path, 'r') as file:
             data = yaml.safe_load(file) or {}
 
-        # Convert directory strings to paths
-        data['output_directory'] = Path.joinpath(PROJECT_ROOT, data.get('output_directory', 'site'))
-        data['template_directory'] = Path.joinpath(PROJECT_ROOT, data.get('template_directory', 'templates'))
+        # Convert directory strings to paths and resolve relative paths
+        data['output_directory'] = (PROJECT_ROOT / data.get('output_directory', 'site')).resolve()
+        data['template_directory'] = (PROJECT_ROOT / data.get('template_directory', 'templates')).resolve()
 
         config = Config(**{
             'rss': data.get('rss', ''),
